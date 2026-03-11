@@ -2,6 +2,7 @@
 
 > **문서 버전**: v21.0
 > **변경 이력**:
+> - v21.1 - BaseEntity 일관성 확보: 전체 21개 엔티티에 created_at/updated_at/deleted_at 3개 필드 통일. 이력성/불변 테이블 deleted_at 예외 조항 변경 (BaseEntity 상속에 따라 컬럼 존재, 운영상 미사용). 13개 테이블에서 총 19개 누락 컬럼 추가.
 > - v21.0 - Figma 디자인 반영: REWARD_TEMPLATE에서 default_value·unit 컬럼 제거, thumbnail_url 추가.
 >   REWARD에서 template_default_value·value·unit 컬럼 제거, thumbnail_url 추가.
 >   category ENUM 간소화 (TIME·ETC 제거 → DATA/GIFTICON).
@@ -49,7 +50,7 @@
 | **Source of Truth** | MySQL이 모든 영속 데이터의 원본 (Redis는 캐시/실시간 상태용) |
 | **Write-Behind** | 실시간 경로(Redis) → 비동기 저장(Kafka usage-persist → MySQL) |
 | **Idempotency** | `event_id` UNIQUE 제약으로 중복 Insert 방지 |
-| **Soft Delete** | 영속 엔티티에 `deleted_at` 컬럼 적용. NULL = 활성, NOT NULL = 삭제. UNIQUE 제약에 `deleted_at` 포함하여 삭제 후 재생성 허용. **예외**: 이력성/불변 테이블(`POLICY_APPEAL`, `REWARD`, `REWARD_GRANT`, `MISSION_ITEM`, `MISSION_REQUEST`, `MISSION_LOG`, `FAMILY_RECAP_MONTHLY`, `FAMILY_RECAP_WEEKLY`)은 삭제 없이 이력을 보존하므로 `deleted_at` 미적용 |
+| **Soft Delete** | 영속 엔티티에 `deleted_at` 컬럼 적용. NULL = 활성, NOT NULL = 삭제. UNIQUE 제약에 `deleted_at` 포함하여 삭제 후 재생성 허용. 모든 엔티티가 `BaseEntity`를 상속하므로 `created_at`, `updated_at`, `deleted_at` 3개 필드를 공통으로 가짐. 이력성/불변 테이블(`POLICY_APPEAL`, `REWARD`, `REWARD_GRANT`, `MISSION_ITEM`, `MISSION_REQUEST`, `MISSION_LOG`, `FAMILY_RECAP_MONTHLY`, `FAMILY_RECAP_WEEKLY`)은 운영상 Soft Delete를 사용하지 않으나, BaseEntity 상속에 따라 `deleted_at` 컬럼은 존재 (항상 NULL) |
 | **바이트 단위 통일** | 모든 데이터량 필드는 `BIGINT` 바이트 단위 |
 
 ### 1.2 엔티티 목록
@@ -188,6 +189,7 @@ erDiagram
         varchar app_id "NULL, 앱 식별자"
         datetime event_time "NOT NULL, 이벤트 발생 시각"
         datetime created_at "DEFAULT CURRENT_TIMESTAMP"
+        datetime updated_at "DEFAULT CURRENT_TIMESTAMP"
         datetime deleted_at "NULL, Soft Delete"
     }
 
@@ -228,6 +230,8 @@ erDiagram
         json payload "NULL, 추가 데이터"
         boolean is_read "NOT NULL DEFAULT FALSE"
         datetime sent_at "DEFAULT CURRENT_TIMESTAMP"
+        datetime created_at "DEFAULT CURRENT_TIMESTAMP"
+        datetime updated_at "DEFAULT CURRENT_TIMESTAMP"
         datetime deleted_at "NULL, Soft Delete"
     }
 
@@ -241,6 +245,7 @@ erDiagram
         json new_value "NULL, 변경 후 값"
         varchar ip_address "NULL, 요청 IP"
         datetime created_at "DEFAULT CURRENT_TIMESTAMP"
+        datetime updated_at "DEFAULT CURRENT_TIMESTAMP"
         datetime deleted_at "NULL, Soft Delete"
     }
 
@@ -252,6 +257,7 @@ erDiagram
         enum status "PENDING | ACCEPTED | EXPIRED | CANCELLED"
         datetime expires_at "NOT NULL, 만료 시각"
         datetime created_at "DEFAULT CURRENT_TIMESTAMP"
+        datetime updated_at "DEFAULT CURRENT_TIMESTAMP"
         datetime deleted_at "NULL, Soft Delete"
     }
 
@@ -269,6 +275,7 @@ erDiagram
         datetime cancelled_at "NULL, 취소 시각"
         datetime created_at "DEFAULT CURRENT_TIMESTAMP"
         datetime updated_at "DEFAULT CURRENT_TIMESTAMP"
+        datetime deleted_at "NULL, Soft Delete"
     }
 
     POLICY_APPEAL_COMMENT {
@@ -277,6 +284,7 @@ erDiagram
         bigint author_id FK "NOT NULL → customer.id"
         text comment "NOT NULL, 댓글 내용"
         datetime created_at "DEFAULT CURRENT_TIMESTAMP"
+        datetime updated_at "DEFAULT CURRENT_TIMESTAMP"
         datetime deleted_at "NULL, Soft Delete"
     }
 
@@ -287,6 +295,8 @@ erDiagram
         enum action_type "MISSION_CREATED | MISSION_REQUESTED | MISSION_APPROVED | MISSION_REJECTED | MISSION_COMPLETED"
         varchar message "NOT NULL VARCHAR(500), 로그 메시지"
         datetime created_at "DEFAULT CURRENT_TIMESTAMP"
+        datetime updated_at "DEFAULT CURRENT_TIMESTAMP"
+        datetime deleted_at "NULL, Soft Delete"
     }
 
     REWARD_TEMPLATE {
@@ -310,6 +320,7 @@ erDiagram
         varchar thumbnail_url "NULL, 이미지 (스냅샷)"
         datetime created_at "DEFAULT CURRENT_TIMESTAMP"
         datetime updated_at "DEFAULT CURRENT_TIMESTAMP"
+        datetime deleted_at "NULL, Soft Delete"
     }
 
     REWARD_GRANT {
@@ -322,6 +333,8 @@ erDiagram
         enum status "ISSUED | USED | EXPIRED"
         datetime expired_at "NULL, 만료 시각"
         datetime created_at "DEFAULT CURRENT_TIMESTAMP"
+        datetime updated_at "DEFAULT CURRENT_TIMESTAMP"
+        datetime deleted_at "NULL, Soft Delete"
     }
 
     MISSION_ITEM {
@@ -335,6 +348,7 @@ erDiagram
         datetime completed_at "NULL, 완료 시각"
         datetime created_at "DEFAULT CURRENT_TIMESTAMP"
         datetime updated_at "DEFAULT CURRENT_TIMESTAMP"
+        datetime deleted_at "NULL, Soft Delete"
     }
 
     MISSION_REQUEST {
@@ -346,6 +360,8 @@ erDiagram
         bigint resolved_by_id FK "NULL → customer.id"
         datetime resolved_at "NULL, 처리 시각"
         datetime created_at "DEFAULT CURRENT_TIMESTAMP"
+        datetime updated_at "DEFAULT CURRENT_TIMESTAMP"
+        datetime deleted_at "NULL, Soft Delete"
     }
 
     FAMILY_RECAP_MONTHLY {
@@ -363,6 +379,7 @@ erDiagram
         decimal communication_score "NULL, 0~100 소통 점수"
         datetime created_at "DEFAULT CURRENT_TIMESTAMP"
         datetime updated_at "DEFAULT CURRENT_TIMESTAMP"
+        datetime deleted_at "NULL, Soft Delete"
     }
 
     FAMILY_RECAP_WEEKLY {
@@ -380,6 +397,7 @@ erDiagram
         int appeal_count "NOT NULL DEFAULT 0"
         datetime created_at "DEFAULT CURRENT_TIMESTAMP"
         datetime updated_at "DEFAULT CURRENT_TIMESTAMP"
+        datetime deleted_at "NULL, Soft Delete"
     }
 ```
 
@@ -521,6 +539,7 @@ erDiagram
         datetime cancelled_at "NULL"
         datetime created_at
         datetime updated_at
+        datetime deleted_at
     }
 
     POLICY_APPEAL_COMMENT {
@@ -529,6 +548,7 @@ erDiagram
         bigint author_id FK
         text comment
         datetime created_at
+        datetime updated_at
         datetime deleted_at
     }
 
@@ -578,6 +598,7 @@ erDiagram
         varchar thumbnail_url "NULL"
         datetime created_at
         datetime updated_at
+        datetime deleted_at
     }
 
     REWARD_GRANT {
@@ -590,6 +611,8 @@ erDiagram
         enum status "ISSUED | USED | EXPIRED"
         datetime expired_at "NULL"
         datetime created_at
+        datetime updated_at
+        datetime deleted_at
     }
 
     MISSION_ITEM {
@@ -603,6 +626,7 @@ erDiagram
         datetime completed_at
         datetime created_at
         datetime updated_at
+        datetime deleted_at
     }
 
     MISSION_REQUEST {
@@ -614,6 +638,8 @@ erDiagram
         bigint resolved_by_id FK
         datetime resolved_at
         datetime created_at
+        datetime updated_at
+        datetime deleted_at
     }
 
     MISSION_LOG {
@@ -623,6 +649,8 @@ erDiagram
         enum action_type "MISSION_CREATED | MISSION_REQUESTED | MISSION_APPROVED | MISSION_REJECTED | MISSION_COMPLETED"
         varchar message
         datetime created_at
+        datetime updated_at
+        datetime deleted_at
     }
 
     FAMILY {
@@ -871,6 +899,7 @@ CUSTOMER와 FAMILY 간 N:M 관계를 해소하는 매핑 테이블.
 | `app_id` | VARCHAR(100) | NULL | 앱 식별자 |
 | `event_time` | DATETIME | NOT NULL | 이벤트 발생 시각 |
 | `created_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP | DB 저장 시각 |
+| `updated_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP | 수정일시 |
 | `deleted_at` | DATETIME | NULL | Soft Delete (NULL = 활성) |
 
 **파티셔닝**: 월별 RANGE 파티셔닝 (`event_time` 기준)
@@ -1015,6 +1044,8 @@ CUSTOMER와 FAMILY 간 N:M 관계를 해소하는 매핑 테이블.
 | `payload` | JSON | NULL | 추가 데이터 (임계치, 차단 사유 등) |
 | `is_read` | BOOLEAN | NOT NULL, DEFAULT FALSE | 읽음 여부 |
 | `sent_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP | 발송 시각 |
+| `created_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP | 생성일시 |
+| `updated_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP | 수정일시 |
 | `deleted_at` | DATETIME | NULL | Soft Delete (NULL = 활성) |
 
 **ENUM 값 (`type`)**:
@@ -1071,6 +1102,7 @@ CUSTOMER와 FAMILY 간 N:M 관계를 해소하는 매핑 테이블.
 | `new_value` | JSON | NULL | 변경 후 값 |
 | `ip_address` | VARCHAR(45) | NULL | 요청 IP (IPv6 대응) |
 | `created_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP | 생성일시 |
+| `updated_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP | 수정일시 |
 | `deleted_at` | DATETIME | NULL | Soft Delete (NULL = 활성) |
 
 **주요 action 값**:
@@ -1124,6 +1156,7 @@ CUSTOMER와 FAMILY 간 N:M 관계를 해소하는 매핑 테이블.
 | `status` | ENUM | NOT NULL, DEFAULT ‘PENDING’ | 초대 상태 |
 | `expires_at` | DATETIME | NOT NULL | 만료 시각 |
 | `created_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP | 생성일시 |
+| `updated_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP | 수정일시 |
 | `deleted_at` | DATETIME | NULL | Soft Delete (NULL = 활성) |
 
 **ENUM 값 (`status`)**:
@@ -1208,6 +1241,7 @@ CUSTOMER와 FAMILY 간 N:M 관계를 해소하는 매핑 테이블.
 | `thumbnail_url` | VARCHAR(500) | NULL | 이미지 경로 스냅샷 (템플릿에서 복사) |
 | `created_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP | 생성일시 |
 | `updated_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP | 수정일시 |
+| `deleted_at` | DATETIME | NULL | Soft Delete (NULL = 활성, 이력 보존 목적으로 운영상 미사용) |
 
 **ENUM 값 (`category`)**:
 
@@ -1249,6 +1283,7 @@ CUSTOMER와 FAMILY 간 N:M 관계를 해소하는 매핑 테이블.
 | `completed_at` | DATETIME | NULL | 완료 시각 |
 | `created_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP | 생성일시 |
 | `updated_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP | 수정일시 |
+| `deleted_at` | DATETIME | NULL | Soft Delete (NULL = 활성, 이력 보존 목적으로 운영상 미사용) |
 
 **ENUM 값 (`status`)**:
 
@@ -1301,6 +1336,8 @@ MISSION_ITEM → COMPLETED
 | `resolved_by_id` | BIGINT | NULL, FK → customer.id | 승인/거절자 (부모) |
 | `resolved_at` | DATETIME | NULL | 처리 시각 |
 | `created_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP | 생성일시 |
+| `updated_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP | 수정일시 |
+| `deleted_at` | DATETIME | NULL | Soft Delete (NULL = 활성, 이력 보존 목적으로 운영상 미사용) |
 
 **ENUM 값 (`status`)**:
 
@@ -1347,6 +1384,7 @@ MISSION_ITEM → COMPLETED
 | `communication_score` | DECIMAL(5,2) | NULL | NORMAL 이의제기와 미션 완료 기반 월간 소통 점수 (0~100, 데이터 없으면 NULL) |
 | `created_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP | 생성일시 |
 | `updated_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP | 수정일시 |
+| `deleted_at` | DATETIME | NULL | Soft Delete (NULL = 활성, 이력 보존 목적으로 운영상 미사용) |
 
 **제약조건**:
 - UNIQUE(`family_id`, `report_month`) — 가족당 월 1건 보장
@@ -1408,6 +1446,7 @@ MISSION_ITEM → COMPLETED
 | `cancelled_at` | DATETIME | NULL | 취소 시각 (CANCELLED 시 기록) |
 | `created_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP | 생성일시 |
 | `updated_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP | 수정일시 |
+| `deleted_at` | DATETIME | NULL | Soft Delete (NULL = 활성, 이력 보존 목적으로 운영상 미사용) |
 
 **ENUM 값 (`type`)**:
 
@@ -1450,6 +1489,7 @@ MISSION_ITEM → COMPLETED
 | `author_id` | BIGINT | NOT NULL, FK → customer.id | 작성자 |
 | `comment` | TEXT | NOT NULL | 댓글 내용 |
 | `created_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP | 생성일시 |
+| `updated_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP | 수정일시 |
 | `deleted_at` | DATETIME | NULL | Soft Delete (NULL = 활성) |
 
 **인덱스**:
@@ -1477,6 +1517,8 @@ MISSION_ITEM → COMPLETED
 | `action_type` | ENUM | NOT NULL | 이벤트 유형 |
 | `message` | VARCHAR(500) | NOT NULL | 로그 메시지 |
 | `created_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP | 이벤트 발생 시각 |
+| `updated_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP | 수정일시 |
+| `deleted_at` | DATETIME | NULL | Soft Delete (NULL = 활성, 이력 보존 목적으로 운영상 미사용) |
 
 **ENUM 값 (`action_type`)**:
 
@@ -1522,6 +1564,7 @@ MISSION_ITEM → COMPLETED
 | `appeal_count` | INT | NOT NULL, DEFAULT 0 | 이의제기 수 |
 | `created_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP | 생성일시 |
 | `updated_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP | 수정일시 |
+| `deleted_at` | DATETIME | NULL | Soft Delete (NULL = 활성, 이력 보존 목적으로 운영상 미사용) |
 
 **제약조건**:
 - UNIQUE(`family_id`, `week_start_date`) — 가족당 주 1건 보장
@@ -1557,6 +1600,8 @@ Admin 화면에서 **지급 내역** 조회에 사용된다.
 | `status` | ENUM | NOT NULL, DEFAULT 'ISSUED' | 지급 상태 |
 | `expired_at` | DATETIME | NULL | 만료일시 |
 | `created_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP | 지급일시 |
+| `updated_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP | 수정일시 |
+| `deleted_at` | DATETIME | NULL | Soft Delete (NULL = 활성, 이력 보존 목적으로 운영상 미사용) |
 
 **ENUM 값 (`status`)**:
 
