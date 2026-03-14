@@ -1,10 +1,11 @@
 # 실시간 가족 데이터 통합 관리 시스템 - ERD 설계서
 
-> **문서 버전**: v23.2
+> **문서 버전**: v23.3
 > **작성일**: 2026-03-15
 > **작성자**: DABOM 팀
 > **변경 이력**:
 >
+> - v23.3 - POLICY_APPEAL에 `policy_active` 물리 컬럼 추가(Flyway V11). NORMAL 이의제기 생성 시 정책 활성/비활성 의도를 컬럼에 저장하고, 부모 승인 시 `desired_rules`와 함께 `policy_assignment.is_active`를 반영하도록 정리.
 > - v23.2 - POLICY_APPEAL 생성 로직 확장: NORMAL 이의제기 생성 시 정책 활성/비활성 의도를 `desired_rules` 내부 키 `_policyActive`로 함께 저장하도록 명시. 부모 승인 시 `desired_rules`의 정책 rule과 `_policyActive`를 함께 반영해 `policy_assignment.rules` 및 `policy_assignment.is_active`를 동기화. DB 물리 컬럼 추가 없이 JSON 내부 필드(논리 컬럼)로 관리.
 > - v23.1 - `family`를 가족 메타 정보 전용으로 축소하고 `FAMILY_QUOTA`를 월별 가족 총량 스냅샷 엔티티로 재도입. 가족 총량 조회 기준을 `family_quota`로 정리하고, Family Redis 키(`info`, `remaining`, `alert`)에 `{yyyyMM}` suffix 규칙을 반영.
 > - v22.1 - API_SPECIFICATION v22.3 동기화: 가족 리캡 집계 기준 정합화: `FAMILY_RECAP_WEEKLY`의 이의제기 카운트 의미를 주간 요청/처리 이벤트 기준으로 재정의하고, `FAMILY_RECAP_MONTHLY`의 mission/appeal summary를 월 내부 full week weekly snapshot 합계 + 좌우 partial raw 보강 구조로 정리. `communication_score`는 carry-in 포함 처리율/이행률 공식으로 갱신. 엔티티 총 21개 유지
@@ -287,7 +288,8 @@ erDiagram
         bigint requester_id FK "NOT NULL → customer.id, 요청자(자녀)"
         text request_reason "NOT NULL, 이의제기/긴급요청 사유"
         text reject_reason "NULL, 거절 사유 (REJECTED 시)"
-        json desired_rules "NULL, 원하는 정책 값 JSON (EMERGENCY: additionalBytes / NORMAL 내부키: _policyActive)"
+        json desired_rules "NULL, 원하는 정책 값 JSON (EMERGENCY: additionalBytes)"
+        boolean policy_active "NULL, NORMAL 이의제기 시 요청 정책 활성/비활성 의도"
         enum status "PENDING | APPROVED | REJECTED | CANCELLED"
         date emergency_grant_month "NULL, EMERGENCY 시 해당 월 1일 (UK)"
         bigint resolved_by_id FK "NULL → customer.id (EMERGENCY는 NULL=시스템)"
@@ -551,7 +553,8 @@ erDiagram
         bigint requester_id FK
         text request_reason
         text reject_reason "NULL"
-        json desired_rules "NULL, NORMAL 내부키: _policyActive"
+        json desired_rules "NULL"
+        boolean policy_active "NULL, NORMAL 요청 의도"
         enum status "PENDING | APPROVED | REJECTED | CANCELLED"
         date emergency_grant_month "NULL, EMERGENCY 시 해당 월 1일 (UK)"
         bigint resolved_by_id FK "NULL (EMERGENCY=시스템)"
@@ -1538,32 +1541,33 @@ MISSION_ITEM → COMPLETED
 - `type`으로 NORMAL(일반 이의제기)과 EMERGENCY(긴급 쿼터)를 구분
 - `policy_assignment_id`: NORMAL 시 NOT NULL (어떤 정책에 대한 이의인지), EMERGENCY 시 NULL (특정 정책 대상 아님)
 - `resolved_by_id`: NORMAL 시 처리자(부모), EMERGENCY 시 NULL (시스템 자동 승인)
-- `desired_rules`: EMERGENCY 시 `{"additionalBytes": 209715200}` 형태, NORMAL 시 정책 rule + 내부 키 `_policyActive`를 포함 가능
+- `desired_rules`: EMERGENCY 시 `{"additionalBytes": 209715200}` 형태, NORMAL 시 변경 원하는 정책 rule 값을 저장
 - EMERGENCY는 월 1회 제한 (`uk_appeal_emergency_month` UNIQUE 제약으로 DB 레벨 동시성 안전 중복 방지, `emergency_grant_month`에 해당 월 1일 저장, NORMAL은 NULL이므로 UNIQUE 제약 무관)
 - EMERGENCY 허용 범위: 100~300MB (104,857,600 ~ 314,572,800 bytes)
 - 무제한 쿼터 사용자(monthly_limit_bytes=NULL)는 EMERGENCY 요청 불가
 - 승인(APPROVED) 시 `desired_rules` 값이 있으면 PolicyAssignment에 자동 반영 (A 방식), `desired_rules = NULL`이면 부모가 별도로 수정 (B 방식)
-- NORMAL 승인 시 `_policyActive`가 존재하면 `policy_assignment.is_active`까지 함께 반영
-- `desired_rules` 스키마는 policy.type별 rules 스키마를 따르되, NORMAL 생성 요청에서는 내부 키 `_policyActive`를 추가로 포함할 수 있음
+- NORMAL 승인 시 `policy_active`가 존재하면 `policy_assignment.is_active`까지 함께 반영
+- `desired_rules` 스키마는 policy.type별 rules 스키마와 동일
 - NORMAL 타입의 PENDING 상태 이의제기만 요청자 본인이 취소 가능 (EMERGENCY 취소 불가)
 
-| 컬럼                    | 타입     | 제약조건                        | 설명                                                                                              |
-| ----------------------- | -------- | ------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `id`                    | BIGINT   | PK, AUTO_INCREMENT              | 이의제기 고유 ID                                                                                  |
-| `type`                  | ENUM     | NOT NULL, DEFAULT 'NORMAL'      | 요청 유형 (NORMAL: 이의제기, EMERGENCY: 긴급 쿼터)                                                |
-| `policy_assignment_id`  | BIGINT   | NULL, FK → policy_assignment.id | 대상 정책 적용 (EMERGENCY 시 NULL)                                                                |
-| `requester_id`          | BIGINT   | NOT NULL, FK → customer.id      | 요청자 (자녀)                                                                                     |
-| `request_reason`        | TEXT     | NOT NULL                        | 이의제기/긴급요청 사유                                                                            |
-| `reject_reason`         | TEXT     | NULL                            | 거절 사유 (REJECTED 시 부모가 작성)                                                               |
-| `desired_rules`         | JSON     | NULL                            | 원하는 정책 값 (EMERGENCY: `{"additionalBytes": N}`, NORMAL: 정책 rules + 내부키 `_policyActive`) |
-| `status`                | ENUM     | NOT NULL, DEFAULT 'PENDING'     | 처리 상태                                                                                         |
-| `emergency_grant_month` | DATE     | NULL                            | EMERGENCY 시 해당 월 1일 (NORMAL은 NULL). UNIQUE 제약으로 월 1회 중복 방지                        |
-| `resolved_by_id`        | BIGINT   | NULL, FK → customer.id          | 처리자 (부모, EMERGENCY는 NULL=시스템)                                                            |
-| `resolved_at`           | DATETIME | NULL                            | 처리 시각                                                                                         |
-| `cancelled_at`          | DATETIME | NULL                            | 취소 시각 (CANCELLED 시 기록)                                                                     |
-| `created_at`            | DATETIME | DEFAULT CURRENT_TIMESTAMP       | 생성일시                                                                                          |
-| `updated_at`            | DATETIME | DEFAULT CURRENT_TIMESTAMP       | 수정일시                                                                                          |
-| `deleted_at`            | DATETIME | NULL                            | Soft Delete (NULL = 활성, 이력 보존 목적으로 운영상 미사용)                                       |
+| 컬럼                    | 타입     | 제약조건                        | 설명                                                                       |
+| ----------------------- | -------- | ------------------------------- | -------------------------------------------------------------------------- |
+| `id`                    | BIGINT   | PK, AUTO_INCREMENT              | 이의제기 고유 ID                                                           |
+| `type`                  | ENUM     | NOT NULL, DEFAULT 'NORMAL'      | 요청 유형 (NORMAL: 이의제기, EMERGENCY: 긴급 쿼터)                         |
+| `policy_assignment_id`  | BIGINT   | NULL, FK → policy_assignment.id | 대상 정책 적용 (EMERGENCY 시 NULL)                                         |
+| `requester_id`          | BIGINT   | NOT NULL, FK → customer.id      | 요청자 (자녀)                                                              |
+| `request_reason`        | TEXT     | NOT NULL                        | 이의제기/긴급요청 사유                                                     |
+| `reject_reason`         | TEXT     | NULL                            | 거절 사유 (REJECTED 시 부모가 작성)                                        |
+| `desired_rules`         | JSON     | NULL                            | 원하는 정책 값 (EMERGENCY: `{"additionalBytes": N}`)                       |
+| `policy_active`         | BOOLEAN  | NULL                            | NORMAL 이의제기에서 승인 시 반영할 정책 활성/비활성 의도 값                |
+| `status`                | ENUM     | NOT NULL, DEFAULT 'PENDING'     | 처리 상태                                                                  |
+| `emergency_grant_month` | DATE     | NULL                            | EMERGENCY 시 해당 월 1일 (NORMAL은 NULL). UNIQUE 제약으로 월 1회 중복 방지 |
+| `resolved_by_id`        | BIGINT   | NULL, FK → customer.id          | 처리자 (부모, EMERGENCY는 NULL=시스템)                                     |
+| `resolved_at`           | DATETIME | NULL                            | 처리 시각                                                                  |
+| `cancelled_at`          | DATETIME | NULL                            | 취소 시각 (CANCELLED 시 기록)                                              |
+| `created_at`            | DATETIME | DEFAULT CURRENT_TIMESTAMP       | 생성일시                                                                   |
+| `updated_at`            | DATETIME | DEFAULT CURRENT_TIMESTAMP       | 수정일시                                                                   |
+| `deleted_at`            | DATETIME | NULL                            | Soft Delete (NULL = 활성, 이력 보존 목적으로 운영상 미사용)                |
 
 **ENUM 값 (`type`)**:
 
@@ -1580,12 +1584,6 @@ MISSION_ITEM → COMPLETED
 | `APPROVED`  | 승인됨                                     |
 | `REJECTED`  | 거절됨                                     |
 | `CANCELLED` | 취소됨 (요청자 본인이 취소, NORMAL만 가능) |
-
-**논리 컬럼(내부 JSON 필드, 물리 컬럼 아님)**:
-
-| 논리 컬럼       | 저장 위치                             | 타입    | 설명                                                        |
-| --------------- | ------------------------------------- | ------- | ----------------------------------------------------------- |
-| `_policyActive` | `policy_appeal.desired_rules` 내부 키 | BOOLEAN | NORMAL 이의제기에서 승인 시 반영할 정책 활성/비활성 의도 값 |
 
 **인덱스**:
 
