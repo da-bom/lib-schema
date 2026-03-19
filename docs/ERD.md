@@ -1,10 +1,11 @@
 # 실시간 가족 데이터 통합 관리 시스템 - ERD 설계서
 
-> **문서 버전**: v24.4
-> **작성일**: 2026-03-18
+> **문서 버전**: v24.5
+> **작성일**: 2026-03-19
 > **작성자**: DABOM 팀
 > **변경 이력**:
 >
+> - v24.5 - weekly/monthly family recap 성능 개선용 인덱스 6종 추가 반영. `mission_item`, `mission_request`, `mission_log`, `policy_appeal`의 리캡 집계 경로(created/resolved/completed 범위 조회) 기준 인덱스 카탈로그와 설명을 동기화. 엔티티 총 24개 유지
 > - v24.4 - source of truth 설명을 코드 기준으로 보강. 내부 보조 문서가 아니라 실제 Flyway와 엔티티 매핑만 근거로 사용하도록 명시하고, 적용 범위를 `V1` ~ `V14`로 정정. 엔티티 총 24개 유지
 > - v24.3 - 루트 ERD의 기준 원칙을 명시: `UNIQUE KEY`는 현재 코드/마이그레이션 구현을 source of truth로, `INDEX`는 루트 ERD 문서를 source of truth로 관리. 이에 따라 인덱스 카탈로그를 별도 섹션으로 복원하고, 코드 반영이 필요한 차이는 별도 계획 문서에서 관리하도록 정리. 엔티티 총 24개 유지
 > - v24.2 - api-core 커밋 `778d64eef4de4e50f2e46a1c7a6b9ef9881ebf69` 반영. `usage_event_outbox`가 설계 항목을 넘어 실제 JPA 엔티티/서비스(`EventOutbox`, `NotificationOutboxPublisher`)로 연결된 점, 현재 코어 구현이 사용하는 상태값 집합(`PUBLISH_PENDING`, `SENT`, `FAILED`)과 정책/이의제기/미션/보상 도메인에서의 알림 발행 연계를 설명에 반영. 엔티티 총 24개 유지
@@ -75,7 +76,7 @@
 
 | 출처 | 적용 방식 |
 | --- | --- |
-| `dabom-api-core/src/main/resources/db/migration/V1` ~ `V14` | Flyway가 직접 관리 |
+| `dabom-api-core/src/main/resources/db/migration/V1` ~ `V15` | Flyway가 직접 관리 |
 | `dabom-api-notification` 엔티티 | `ddl-auto=update`로 `notification_log`, `push_subscription` 보강 |
 
 제외:
@@ -1528,6 +1529,8 @@ MISSION_ITEM → COMPLETED
 **인덱스**:
 
 - `idx_mission_family` : (`family_id`, `status`, `created_at` DESC) (가족별 미션 목록)
+- `idx_mission_recap_family_created` : (`family_id`, `created_at`, `deleted_at`) (weekly/monthly recap 생성 건수 집계)
+- `idx_mission_recap_family_completed` : (`family_id`, `status`, `completed_at`, `deleted_at`) (weekly/monthly recap 완료 건수 집계)
 - `idx_mission_creator` : (`created_by_id`) (생성자별 미션)
 - `idx_mission_target` : (`target_customer_id`, `status`, `created_at` DESC) (대상 자녀별 미션 목록)
 
@@ -1577,6 +1580,7 @@ MISSION_ITEM → COMPLETED
 **인덱스**:
 
 - `idx_mreq_mission` : (`mission_item_id`, `created_at` DESC) (미션별 요청 이력)
+- `idx_mreq_recap_item_status_resolved` : (`mission_item_id`, `status`, `resolved_at`, `deleted_at`) (weekly/monthly recap 반려 요청 집계)
 - `idx_mreq_requester` : (`requester_id`, `created_at` DESC) (요청자별 이력)
 - `uk_mission_request_active_request_mission` : UNIQUE (`active_request_mission_id`) (미션별 활성 보상 요청 1건 제한, NULL은 UNIQUE 미적용)
 
@@ -1709,6 +1713,8 @@ MISSION_ITEM → COMPLETED
 **인덱스**:
 
 - `idx_appeal_assignment` : `policy_assignment_id` (정책 적용별 이의신청 조회)
+- `idx_appeal_recap_assignment_type_created` : (`policy_assignment_id`, `type`, `created_at`, `deleted_at`) (weekly/monthly recap 생성 건수 집계)
+- `idx_appeal_recap_assignment_type_status_resolved` : (`policy_assignment_id`, `type`, `status`, `resolved_at`, `deleted_at`) (weekly/monthly recap 처리 건수 집계)
 - `idx_appeal_requester` : `requester_id` (요청자별 이의신청 조회)
 - `idx_appeal_emergency_monthly` : (`requester_id`, `type`, `status`, `created_at`) (월별 긴급 요청 조회 최적화)
 - `uk_policy_appeal_emergency_month` : UNIQUE (`requester_id`, `emergency_grant_month`) (월 1회 긴급 요청 중복 방지, NULL은 UNIQUE 미적용)
@@ -1781,6 +1787,7 @@ MISSION_ITEM → COMPLETED
 **인덱스**:
 
 - `idx_mission_log_item` : (`mission_item_id`, `created_at`) (미션별 타임라인 조회)
+- `idx_mission_log_recap_item_action_created` : (`mission_item_id`, `action_type`, `created_at`, `deleted_at`) (monthly recap carry-in 집계)
 - `idx_mission_log_actor` : `actor_id` (수행자별 로그)
 
 ---
@@ -2162,20 +2169,26 @@ POLICY_APPEAL.resolved_by_id → CUSTOMER.id  (처리자 = 부모, NULL 허용)
 | `invite`                | `idx_invite_family`                         | (`family_id`, `status`)                             | 가족별 초대 목록                       |
 | `reward`                | `idx_reward_template`                       | (`reward_template_id`)                              | 템플릿별 보상 조회                     |
 | `mission_item`          | `idx_mission_family`                        | (`family_id`, `status`, `created_at` DESC)          | 가족별 미션 목록                       |
+| `mission_item`          | `idx_mission_recap_family_created`          | (`family_id`, `created_at`, `deleted_at`)           | 리캡 미션 생성 집계                    |
+| `mission_item`          | `idx_mission_recap_family_completed`        | (`family_id`, `status`, `completed_at`, `deleted_at`) | 리캡 미션 완료 집계                  |
 | `mission_item`          | `idx_mission_creator`                       | (`created_by_id`)                                   | 생성자별 미션                          |
 | `mission_item`          | `idx_mission_target`                        | (`target_customer_id`, `status`, `created_at` DESC) | 대상 자녀별 미션 목록                  |
 | `mission_request`       | `idx_mreq_mission`                          | (`mission_item_id`, `created_at` DESC)              | 미션별 요청 이력                       |
+| `mission_request`       | `idx_mreq_recap_item_status_resolved`       | (`mission_item_id`, `status`, `resolved_at`, `deleted_at`) | 리캡 반려 요청 집계             |
 | `mission_request`       | `idx_mreq_requester`                        | (`requester_id`, `created_at` DESC)                 | 요청자별 이력                          |
 | `mission_request`       | `uk_mission_request_active_request_mission` | UNIQUE (`active_request_mission_id`)                | 미션별 활성 보상 요청 1건 제한         |
 | `family_recap_monthly`  | `idx_recap_monthly_family_month`            | (`family_id`, `report_month` DESC)                  | 가족별 월간 리캡                       |
 | `family_recap_weekly`   | `idx_recap_weekly_family_week`              | (`family_id`, `week_start_date` DESC)               | 가족별 주간 리캡 조회                  |
 | `policy_appeal`         | `idx_appeal_assignment`                     | `policy_assignment_id`                              | 정책 적용별 이의제기 조회              |
+| `policy_appeal`         | `idx_appeal_recap_assignment_type_created`  | (`policy_assignment_id`, `type`, `created_at`, `deleted_at`) | 리캡 이의제기 생성 집계        |
+| `policy_appeal`         | `idx_appeal_recap_assignment_type_status_resolved` | (`policy_assignment_id`, `type`, `status`, `resolved_at`, `deleted_at`) | 리캡 이의제기 처리 집계 |
 | `policy_appeal`         | `idx_appeal_requester`                      | `requester_id`                                      | 요청자별 이의제기 조회                 |
 | `policy_appeal`         | `idx_appeal_emergency_monthly`              | (`requester_id`, `type`, `status`, `created_at`)    | 월별 긴급 요청 조회 최적화             |
 | `policy_appeal`         | `uk_policy_appeal_emergency_month`          | UNIQUE (`requester_id`, `emergency_grant_month`)    | 월 1회 긴급 요청 동시성 안전 중복 방지 |
 | `policy_appeal_comment` | `idx_appeal_comment_appeal`                 | (`appeal_id`, `created_at`)                         | 이의제기별 댓글 목록                   |
 | `policy_appeal_comment` | `idx_appeal_comment_author`                 | `author_id`                                         | 작성자별 댓글 조회                     |
 | `mission_log`           | `idx_mission_log_item`                      | (`mission_item_id`, `created_at`)                   | 미션별 타임라인 조회                   |
+| `mission_log`           | `idx_mission_log_recap_item_action_created` | (`mission_item_id`, `action_type`, `created_at`, `deleted_at`) | 리캡 carry-in 집계            |
 | `mission_log`           | `idx_mission_log_actor`                     | `actor_id`                                          | 수행자별 로그 조회                     |
 | `reward_grant`          | `idx_reward_grant_customer`                 | (`customer_id`)                                     | 사용자별 지급 이력 조회                |
 | `reward_grant`          | `idx_reward_grant_status`                   | (`status`)                                          | 상태별 지급 이력 조회                  |
